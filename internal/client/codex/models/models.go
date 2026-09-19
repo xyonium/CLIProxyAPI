@@ -18,6 +18,10 @@ type codexClientModelsPayload struct {
 // ProvidersForModelFunc returns the providers registered for a model.
 type ProvidersForModelFunc func(string) []string
 
+// WebSearchCapabilityForModelFunc returns explicit conservative capability
+// metadata for an exact public model ID. nil means unknown.
+type WebSearchCapabilityForModelFunc func(string) *bool
+
 var (
 	codexClientModelTemplatesMu       sync.Mutex
 	codexClientModelTemplatesLoaded   bool
@@ -55,12 +59,18 @@ func BuildResponse(availableModels []map[string]any, providersForModel Providers
 // BuildResponseForClient builds a Codex client model response from available models
 // tailored for a specific client version.
 func BuildResponseForClient(availableModels []map[string]any, providersForModel ProvidersForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) map[string]any {
+	return BuildResponseForClientWithCPACapabilities(availableModels, providersForModel, registry.GetGlobalRegistry().GetResponsesWebSearchCapability, optimizeMultiAgentV2, clientVersion)
+}
+
+// BuildResponseForClientWithCPACapabilities builds a client response while
+// allowing Home to supply capability metadata independent of the local registry.
+func BuildResponseForClientWithCPACapabilities(availableModels []map[string]any, providersForModel ProvidersForModelFunc, webSearchCapabilityForModel WebSearchCapabilityForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) map[string]any {
 	return map[string]any{
-		"models": buildCodexClientModels(availableModels, providersForModel, optimizeMultiAgentV2, clientVersion),
+		"models": buildCodexClientModels(availableModels, providersForModel, webSearchCapabilityForModel, optimizeMultiAgentV2, clientVersion),
 	}
 }
 
-func buildCodexClientModels(models []map[string]any, providersForModel ProvidersForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) []map[string]any {
+func buildCodexClientModels(models []map[string]any, providersForModel ProvidersForModelFunc, webSearchCapabilityForModel WebSearchCapabilityForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) []map[string]any {
 	templates, defaultTemplate, err := loadCodexClientModelTemplates()
 	if err != nil || defaultTemplate == nil {
 		return nil
@@ -89,11 +99,13 @@ func buildCodexClientModels(models []map[string]any, providersForModel Providers
 				applyCodexClientThinkingMetadata(entry, thinkingSupport, clientVersion)
 			}
 			applyCodexClientProviderCapabilities(entry, id, true, providersForModel)
+			applyCPAWebSearchCapability(entry, id, webSearchCapabilityForModel, clientVersion)
 			sanitizeCodexClientReasoningMetadata(entry, clientVersion)
 			applyCodexClientVisibilityOverride(entry, id)
 			if optimizeMultiAgentV2 {
 				entry["multi_agent_version"] = "v2"
 			}
+			applyCodexClientDevinDisplayName(entry, id, model, providersForModel)
 			result = append(result, entry)
 			continue
 		}
@@ -102,8 +114,10 @@ func buildCodexClientModels(models []map[string]any, providersForModel Providers
 		applyCodexClientModelMetadata(entry, id, model, optimizeMultiAgentV2, clientVersion)
 		applyCodexClientMaxTokens(entry, model)
 		applyCodexClientProviderCapabilities(entry, id, false, providersForModel)
+		applyCPAWebSearchCapability(entry, id, webSearchCapabilityForModel, clientVersion)
 		sanitizeCodexClientReasoningMetadata(entry, clientVersion)
 		applyCodexClientVisibilityOverride(entry, id)
+		applyCodexClientDevinDisplayName(entry, id, model, providersForModel)
 		result = append(result, entry)
 	}
 
@@ -229,6 +243,94 @@ func applyCodexClientDisplayName(entry map[string]any, model map[string]any) {
 	if displayName := stringModelValue(model, "display_name"); displayName != "" {
 		entry["display_name"] = displayName
 	}
+}
+
+func applyCodexClientDevinDisplayName(entry map[string]any, id string, model map[string]any, providersForModel ProvidersForModelFunc) {
+	if !isCodexClientDevinModel(id, model, entry, providersForModel) {
+		return
+	}
+	displayName := stringModelValue(entry, "display_name")
+	if displayName == "" {
+		displayName = id
+	}
+	trimmed := strings.TrimSpace(displayName)
+	if strings.HasSuffix(trimmed, " (Devin)") {
+		return
+	}
+	if strings.HasSuffix(strings.ToLower(trimmed), " (devin)") {
+		entry["display_name"] = trimmed[:len(trimmed)-len(" (devin)")] + " (Devin)"
+		return
+	}
+	if strings.HasSuffix(strings.ToLower(trimmed), "(devin)") {
+		entry["display_name"] = strings.TrimSpace(trimmed[:len(trimmed)-len("(devin)")]) + " (Devin)"
+		return
+	}
+	entry["display_name"] = trimmed + " (Devin)"
+}
+
+func isCodexClientDevinModel(id string, model map[string]any, entry map[string]any, providersForModel ProvidersForModelFunc) bool {
+	idLower := strings.ToLower(strings.TrimSpace(id))
+	if strings.HasPrefix(idLower, "devin/") {
+		return true
+	}
+	if idx := strings.Index(idLower, "/"); idx != -1 {
+		rest := idLower[idx+1:]
+		if strings.HasPrefix(rest, "devin/") {
+			return true
+		}
+	}
+	if entry != nil {
+		slugLower := strings.ToLower(strings.TrimSpace(stringModelValue(entry, "slug")))
+		if strings.HasPrefix(slugLower, "devin/") {
+			return true
+		}
+		if idx := strings.Index(slugLower, "/"); idx != -1 {
+			rest := slugLower[idx+1:]
+			if strings.HasPrefix(rest, "devin/") {
+				return true
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(stringModelValue(entry, "type")), "devin") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(stringModelValue(entry, "owned_by")), "cognition") {
+			return true
+		}
+	}
+	if model != nil {
+		if strings.EqualFold(strings.TrimSpace(stringModelValue(model, "type")), "devin") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(stringModelValue(model, "owned_by")), "cognition") {
+			return true
+		}
+	}
+	if info := registry.LookupModelInfo(id); info != nil {
+		if strings.EqualFold(info.Type, "devin") || strings.EqualFold(info.OwnedBy, "cognition") || strings.HasPrefix(strings.ToLower(info.ID), "devin/") {
+			return true
+		}
+	} else if idx := strings.Index(id, "/"); idx != -1 {
+		base := strings.TrimSpace(id[idx+1:])
+		if info := registry.LookupModelInfo(base); info != nil {
+			if strings.EqualFold(info.Type, "devin") || strings.EqualFold(info.OwnedBy, "cognition") || strings.HasPrefix(strings.ToLower(info.ID), "devin/") {
+				return true
+			}
+		}
+	}
+	if providersForModel != nil {
+		providers := providersForModel(id)
+		if len(providers) == 0 && strings.Contains(id, "/") {
+			idx := strings.Index(id, "/")
+			base := strings.TrimSpace(id[idx+1:])
+			providers = providersForModel(base)
+		}
+		for _, p := range providers {
+			if strings.EqualFold(strings.TrimSpace(p), "devin") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func applyCodexClientDescription(entry map[string]any, model map[string]any) {
@@ -401,6 +503,17 @@ func applyCodexClientMaxContextLengthOverride(entry map[string]any, model map[st
 func applyCodexClientMaxTokens(entry map[string]any, model map[string]any) {
 	if maxCompletionTokens := intModelValue(model, "max_completion_tokens"); maxCompletionTokens > 0 {
 		entry["max_tokens"] = maxCompletionTokens
+	}
+}
+
+func applyCPAWebSearchCapability(entry map[string]any, id string, capabilityForModel WebSearchCapabilityForModelFunc, clientVersion string) {
+	// Templates must not supply runtime capability claims or leak CPA-only fields.
+	delete(entry, "cpa_capabilities")
+	if clientVersion != "cpa" || capabilityForModel == nil {
+		return
+	}
+	if supported := capabilityForModel(strings.TrimSpace(id)); supported != nil {
+		entry["cpa_capabilities"] = map[string]any{"web_search": *supported}
 	}
 }
 

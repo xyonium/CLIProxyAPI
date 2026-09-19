@@ -1391,3 +1391,179 @@ func TestCodexClientModelsResponse_OAuthAliasesInheritCompleteReasoningLevelsWit
 		}
 	}
 }
+
+func TestCodexClientModelsResponse_CPAWebSearchCapabilities(t *testing.T) {
+	trueValue, falseValue := true, false
+	capabilities := map[string]*bool{
+		"supported-model":   &trueValue,
+		"unsupported-model": &falseValue,
+	}
+	availableModels := []map[string]any{
+		{"id": "supported-model"},
+		{"id": "unsupported-model"},
+		{"id": "unknown-model"},
+	}
+
+	resp := BuildResponseForClientWithCPACapabilities(availableModels, nil, func(id string) *bool {
+		return capabilities[id]
+	}, false, "cpa")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != len(availableModels) {
+		t.Fatalf("models = %#v, want %d models", resp["models"], len(availableModels))
+	}
+	entries := make(map[string]map[string]any, len(models))
+	for _, model := range models {
+		entries[stringModelValue(model, "slug")] = model
+	}
+	assertCPAWebSearchCapability(t, entries["supported-model"], true, true)
+	assertCPAWebSearchCapability(t, entries["unsupported-model"], false, true)
+	assertCPAWebSearchCapability(t, entries["unknown-model"], false, false)
+}
+
+func TestCodexClientModelsResponse_CPAWebSearchCapabilitiesOnlyForCPAClient(t *testing.T) {
+	capabilityLookup := func(string) *bool { value := true; return &value }
+	for _, clientVersion := range []string{"", "0.153.4", "CPA", "cpa-preview"} {
+		resp := BuildResponseForClientWithCPACapabilities([]map[string]any{{"id": "gpt-5.5"}}, nil, capabilityLookup, false, clientVersion)
+		models, ok := resp["models"].([]map[string]any)
+		if !ok || len(models) != 1 {
+			t.Fatalf("client version %q models = %#v, want one model", clientVersion, resp["models"])
+		}
+		assertCPAWebSearchCapability(t, models[0], false, false)
+	}
+}
+
+func assertCPAWebSearchCapability(t *testing.T, model map[string]any, want bool, wantPresent bool) {
+	t.Helper()
+	raw, present := model["cpa_capabilities"]
+	if present != wantPresent {
+		t.Fatalf("model %q cpa_capabilities presence = %v, want %v", stringModelValue(model, "slug"), present, wantPresent)
+	}
+	if !wantPresent {
+		return
+	}
+	capabilities, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("model %q cpa_capabilities = %#v, want object", stringModelValue(model, "slug"), raw)
+	}
+	if got, ok := capabilities["web_search"].(bool); !ok || got != want {
+		t.Fatalf("model %q web_search = %#v, want %v", stringModelValue(model, "slug"), capabilities["web_search"], want)
+	}
+}
+
+func TestCodexClientModelsResponse_DevinDisplayName(t *testing.T) {
+	availableModels := []map[string]any{
+		// 1. Template Devin model with explicit display_name
+		{
+			"id":           "devin/gpt-6-astra",
+			"display_name": "GPT-6 Astra",
+		},
+		// 2. Template Devin model without display_name (inherits template "GPT-5.5")
+		{
+			"id": "devin/gpt-5.5",
+		},
+		// 3. Non-template Devin model
+		{
+			"id":           "devin/swe-2",
+			"display_name": "SWE-2",
+		},
+		// 4. Non-Devin model (must NOT have (Devin) suffix)
+		{
+			"id":           "gpt-6-astra",
+			"display_name": "GPT 6.0 Astra",
+		},
+		// 5. Standard non-Devin model
+		{
+			"id": "gpt-5.5",
+		},
+		// 6. Devin model that already has (Devin) suffix
+		{
+			"id":           "devin/swe-1-7",
+			"display_name": "SWE-1.7 (Devin)",
+		},
+		// 7. Model identified via type: "devin"
+		{
+			"id":           "custom-devin-by-type",
+			"display_name": "Custom Model",
+			"type":         "devin",
+		},
+		// 8. Model identified via owned_by: "cognition"
+		{
+			"id":           "custom-devin-by-owned",
+			"display_name": "Cognition Model",
+			"owned_by":     "cognition",
+		},
+		// 9. Model identified via providersForModel
+		{
+			"id":           "provider-devin-model",
+			"display_name": "Provider Model",
+		},
+		// 10. Channel-prefixed Devin model
+		{
+			"id":           "1/devin/swe-2",
+			"display_name": "SWE-2",
+		},
+		// 11. Model with devin in substring but not a devin model
+		{
+			"id":           "my-devin-tool",
+			"display_name": "My Devin Tool",
+			"type":         "openai",
+		},
+		// 12. Channel prefixed model whose explicit provider is openai
+		{
+			"id":           "channel/swe-2",
+			"display_name": "Channel SWE-2",
+		},
+	}
+
+	providerLookup := func(id string) []string {
+		if id == "provider-devin-model" {
+			return []string{"devin"}
+		}
+		if id == "channel/swe-2" {
+			return []string{"openai"}
+		}
+		return []string{"openai"}
+	}
+
+	resp := BuildResponseForClient(availableModels, providerLookup, false, "0.153.4")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok {
+		t.Fatalf("resp models type = %T, want []map[string]any", resp["models"])
+	}
+
+	bySlug := make(map[string]map[string]any, len(models))
+	for _, m := range models {
+		slug := stringModelValue(m, "slug")
+		bySlug[slug] = m
+	}
+
+	testCases := []struct {
+		slug            string
+		wantDisplayName string
+	}{
+		{"devin/gpt-6-astra", "GPT-6 Astra (Devin)"},
+		{"devin/gpt-5.5", "GPT-5.5 (Devin)"},
+		{"devin/swe-2", "SWE-2 (Devin)"},
+		{"gpt-6-astra", "GPT 6.0 Astra"},
+		{"gpt-5.5", "GPT-5.5"},
+		{"devin/swe-1-7", "SWE-1.7 (Devin)"},
+		{"custom-devin-by-type", "Custom Model (Devin)"},
+		{"custom-devin-by-owned", "Cognition Model (Devin)"},
+		{"provider-devin-model", "Provider Model (Devin)"},
+		{"1/devin/swe-2", "SWE-2 (Devin)"},
+		{"my-devin-tool", "My Devin Tool"},
+		{"channel/swe-2", "Channel SWE-2"},
+	}
+
+	for _, tc := range testCases {
+		entry, exists := bySlug[tc.slug]
+		if !exists {
+			t.Errorf("model %q not found in response", tc.slug)
+			continue
+		}
+		got := stringModelValue(entry, "display_name")
+		if got != tc.wantDisplayName {
+			t.Errorf("model %q display_name = %q, want %q", tc.slug, got, tc.wantDisplayName)
+		}
+	}
+}
