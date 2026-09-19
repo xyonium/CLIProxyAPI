@@ -23,6 +23,11 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// openAIEmbeddingHandlerType is the SourceFormat tag for /v1/embeddings requests.
+// The upstream OpenAI-compatible executor routes on this value to select the
+// /embeddings endpoint, mirroring how xaiImagesHandlerType selects /images/*.
+const openAIEmbeddingHandlerType = "openai-embedding"
+
 // OpenAIAPIHandler contains the handlers for OpenAI API endpoints.
 // It holds a pool of clients to interact with the backend service.
 type OpenAIAPIHandler struct {
@@ -147,6 +152,39 @@ func shouldTreatAsResponsesFormat(rawJSON []byte) bool {
 		return true
 	}
 	return false
+}
+
+// Embeddings handles the /v1/embeddings endpoint. It forwards the request
+// unchanged to the upstream OpenAI-compatible provider's /embeddings endpoint;
+// both entry and exit protocols are OpenAI format so no payload translation is
+// required. Only models registered with the embedding capability may be used.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+func (h *OpenAIAPIHandler) Embeddings(c *gin.Context) {
+	rawJSON, err := handlers.ReadRequestBody(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: fmt.Sprintf("Invalid request: %v", err),
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	c.Header("Content-Type", "application/json")
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+	resp, upstreamHeaders, errMsg := h.ExecuteEmbeddingWithAuthManager(cliCtx, openAIEmbeddingHandlerType, modelName, rawJSON, h.GetAlt(c))
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		cliCancel(errMsg.Error)
+		return
+	}
+	handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
+	_, _ = c.Writer.Write(resp)
+	cliCancel()
 }
 
 // Completions handles the /v1/completions endpoint.

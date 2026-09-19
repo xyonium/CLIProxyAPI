@@ -19,6 +19,9 @@ import (
 // OpenAIImageModelType marks models that are callable through OpenAI-compatible image endpoints.
 const OpenAIImageModelType = "openai-image"
 
+// OpenAIEmbeddingModelType marks models that are callable through OpenAI-compatible embedding endpoints.
+const OpenAIEmbeddingModelType = "openai-embedding"
+
 const (
 	DefaultClaudeMaxInputTokens  = 200000
 	DefaultClaudeMaxOutputTokens = 64000

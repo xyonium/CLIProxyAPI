@@ -38,6 +38,14 @@ func (h *BaseAPIHandler) ExecuteImageWithAuthManager(ctx context.Context, handle
 	return h.executeWithAuthManager(ctx, handlerType, modelName, rawJSON, alt, true)
 }
 
+// ExecuteEmbeddingWithAuthManager executes an OpenAI-compatible /v1/embeddings request.
+// The handlerType is forwarded as the executor SourceFormat so the OpenAI-compat
+// executor routes to /embeddings. The upstream response is already in OpenAI
+// embedding format, so the exit protocol stays "openai" and no translation runs.
+func (h *BaseAPIHandler) ExecuteEmbeddingWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) ([]byte, http.Header, *interfaces.ErrorMessage) {
+	return h.executeWithAuthManagerFormats(ctx, handlerType, "openai", modelName, rawJSON, alt, false, modelExecutionOptions{})
+}
+
 func (h *BaseAPIHandler) executeWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string, allowImageModel bool) ([]byte, http.Header, *interfaces.ErrorMessage) {
 	return h.executeWithAuthManagerFormats(ctx, handlerType, handlerType, modelName, rawJSON, alt, allowImageModel, modelExecutionOptions{})
 }

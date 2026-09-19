@@ -778,13 +778,15 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		modelType := "openai-compatibility"
 		if model.Image {
 			modelType = registry.OpenAIImageModelType
+		} else if model.Embedding {
+			modelType = registry.OpenAIEmbeddingModelType
 		}
 		info := buildConfiguredModelInfo(model, compat.Name, modelType, now, strings.TrimSpace(model.Alias), false)
 		if info == nil {
 			continue
 		}
 		thinkingSupport := model.Thinking
-		if thinkingSupport == nil && !model.Image {
+		if thinkingSupport == nil && !model.Image && !model.Embedding {
 			thinkingSupport = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
 		}
 		if model.Thinking != nil {

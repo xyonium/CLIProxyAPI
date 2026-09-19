@@ -30,8 +30,10 @@ import (
 
 const (
 	openAICompatImageHandlerType            = "openai-image"
+	openAICompatEmbeddingHandlerType        = "openai-embedding"
 	openAICompatImagesGenerationsPath       = "/images/generations"
 	openAICompatImagesEditsPath             = "/images/edits"
+	openAICompatEmbeddingsPath              = "/embeddings"
 	openAICompatDefaultImageEndpoint        = openAICompatImagesGenerationsPath
 	openAICompatMultipartMemory       int64 = 32 << 20
 )
@@ -109,6 +111,11 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if opts.Alt == "responses/compact" {
 		to = sdktranslator.FromString("openai-response")
 		endpoint = "/responses/compact"
+	}
+	if from.String() == openAICompatEmbeddingHandlerType {
+		// Embeddings requests arrive in OpenAI format and the upstream response is
+		// already OpenAI format, so no translation is needed; just select the endpoint.
+		endpoint = openAICompatEmbeddingsPath
 	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
