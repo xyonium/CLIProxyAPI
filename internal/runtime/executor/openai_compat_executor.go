@@ -136,6 +136,12 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if helps.ShouldNormalizeOpenAIToolResultsForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel) {
 		translated = helps.NormalizeOpenAIToolResultsTextOnly(translated)
 	}
+	if from == sdktranslator.FormatOpenAI && to == sdktranslator.FormatOpenAI {
+		// Requests that arrive already in OpenAI format skip the claude->openai
+		// translator (where #6230 normalized boolean JSON Schema subschemas), so
+		// MCP tool schemas with "items": true would reach strict upstreams verbatim.
+		translated = helps.NormalizeOpenAIBooleanSubschemas(translated)
+	}
 	if opts.Alt != "responses/compact" {
 		useMCT := helps.ShouldUseMaxCompletionTokensForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel)
 		translated = helps.NormalizeOpenAIMaxTokens(translated, useMCT)
@@ -355,6 +361,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	if helps.ShouldNormalizeOpenAIToolResultsForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel) {
 		translated = helps.NormalizeOpenAIToolResultsTextOnly(translated)
+	}
+	if from == sdktranslator.FormatOpenAI && to == sdktranslator.FormatOpenAI {
+		// See Execute: openai-format arrivals bypass the claude->openai #6230 fix.
+		translated = helps.NormalizeOpenAIBooleanSubschemas(translated)
 	}
 	if opts.Alt != "responses/compact" {
 		useMCT := helps.ShouldUseMaxCompletionTokensForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel)
