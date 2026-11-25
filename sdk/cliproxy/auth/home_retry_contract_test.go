@@ -1648,3 +1648,20 @@ func TestHomeRetryRoundUsesAuthoritativeZeroAggregate(t *testing.T) {
 		})
 	}
 }
+
+// TestHomeDispatchDoesNotCreateProviderBudget documents that Home dispatch stays
+// outside the per-provider cap: no request budget is created for it at all.
+func TestHomeDispatchDoesNotCreateProviderBudget(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{
+		Home:                           internalconfig.HomeConfig{Enabled: true},
+		MaxRetryCredentialsPerProvider: 1,
+	})
+	if manager.MaxRetryCredentials() != 0 {
+		t.Fatalf("home mode still exposes a credential retry cap")
+	}
+	ctx := manager.WithProviderAttemptBudget(context.Background())
+	if budget := providerAttemptBudgetFromContext(ctx); budget != nil {
+		t.Fatalf("home dispatch created a provider budget (limit=%d)", budget.limit)
+	}
+}

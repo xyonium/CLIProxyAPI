@@ -125,10 +125,30 @@ func (s *ConfigSynthesizer) synthesizeInteractionsKeys(ctx *SynthesisContext) []
 	return s.synthesizeGeminiKeyEntries(ctx, ctx.Config.InteractionsKey, "gemini-interactions:apikey", "interactions", "interactions-apikey", constant.GeminiInteractions)
 }
 
+// generatedLegacyGroupName returns a deterministic label for a legacy list entry
+// that carries no group name, skipping labels already claimed by an explicit
+// name in the same list so two entries never share one scheduling group.
+func generatedLegacyGroupName(sourceName string, index int, explicit map[string]struct{}) string {
+	base := fmt.Sprintf("%s-%d", sourceName, index)
+	candidate := base
+	for suffix := 2; ; suffix++ {
+		if _, taken := explicit[candidate]; !taken {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, suffix)
+	}
+}
+
 func (s *ConfigSynthesizer) synthesizeGeminiKeyEntries(ctx *SynthesisContext, entries []config.GeminiKey, idKind, sourceName, label, provider string) []*coreauth.Auth {
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 
+	explicitNames := make(map[string]struct{}, len(entries))
+	for i := range entries {
+		if name := strings.TrimSpace(entries[i].Name); name != "" {
+			explicitNames[name] = struct{}{}
+		}
+	}
 	out := make([]*coreauth.Auth, 0, len(entries))
 	for i := range entries {
 		entry := entries[i]
@@ -150,6 +170,21 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeyEntries(ctx *SynthesisContext, en
 		}
 		if key != "" {
 			attrs["api_key"] = key
+		}
+		name := strings.TrimSpace(entry.Name)
+		if name == "" && (sourceName == "gemini" || sourceName == "interactions") {
+			// Legacy lists have no group name. Use the same deterministic label
+			// that NormalizeConfigLayout assigns so migration does not change the
+			// scheduling group identity. Prefer the pre-sanitization position so
+			// skipped or duplicate entries cannot shift later labels.
+			index := entry.SourceIndex
+			if index <= 0 {
+				index = i + 1
+			}
+			name = generatedLegacyGroupName(sourceName, index, explicitNames)
+		}
+		if name != "" {
+			attrs[coreauth.AttributeProviderName] = name
 		}
 		metadata := map[string]any{}
 		if entry.DisableCooling != nil {
